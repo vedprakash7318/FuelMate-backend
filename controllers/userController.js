@@ -70,13 +70,21 @@ exports.createUser = async (req, res) => {
     const pumpId = req.user.pumpId;
     const { name, mobile, email, username, password, address } = req.body;
 
-    if (!name || !mobile || !username || !password) {
-      return res.status(400).json({ success: false, message: 'Name, mobile, username, and password are required' });
+    if (!name || !mobile || !password) {
+      return res.status(400).json({ success: false, message: 'Name, mobile, and password are required' });
     }
 
-    const existing = await User.findOne({ username: username.toLowerCase().trim() });
+    const resolvedUsername = (username || mobile).toLowerCase().trim();
+
+    const existing = await User.findOne({
+      $or: [
+        { username: resolvedUsername },
+        { mobile: mobile.trim() },
+        ...(email && email.trim() ? [{ email: email.toLowerCase().trim() }] : []),
+      ],
+    });
     if (existing) {
-      return res.status(400).json({ success: false, message: 'Username is already taken' });
+      return res.status(400).json({ success: false, message: 'An employee with this mobile number, email, or username already exists' });
     }
 
     const salt = await bcrypt.genSalt(10);
@@ -87,7 +95,7 @@ exports.createUser = async (req, res) => {
       name: name.trim(),
       mobile: mobile.trim(),
       email: email ? email.toLowerCase().trim() : undefined,
-      username: username.toLowerCase().trim(),
+      username: resolvedUsername,
       password: hashedPassword,
       role: 'employee',
       address: address ? address.trim() : undefined,

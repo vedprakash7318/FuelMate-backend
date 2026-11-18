@@ -25,6 +25,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // API Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/superadmin', require('./routes/superAdminRoutes'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/owners', require('./routes/owners'));
 app.use('/api/vehicles', require('./routes/vehicles'));
