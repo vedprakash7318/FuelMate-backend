@@ -116,11 +116,22 @@ exports.createPayment = async (req, res) => {
   }
 };
 
-// GET /api/payments - List payments
+// GET /api/payments - List payments with server-side search, filter, pagination
 exports.getPayments = async (req, res) => {
   try {
     const pumpId = req.user.pumpId;
-    const { ownerId, vehicleId, paymentMode, status, startDate, endDate, page = 1, limit = 50 } = req.query;
+    const {
+      ownerId,
+      vehicleId,
+      paymentMode,
+      status,
+      startDate,
+      endDate,
+      search,
+      page = 1,
+      limit = 20,
+      all = 'false',
+    } = req.query;
 
     const query = { pumpId };
     if (ownerId) query.ownerId = ownerId;
@@ -138,23 +149,85 @@ exports.getPayments = async (req, res) => {
       }
     }
 
-    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped, 'i');
 
-    const [payments, total] = await Promise.all([
+      const [matchedOwners, matchedVehicles] = await Promise.all([
+        Owner.find({ pumpId, $or: [{ name: regex }, { mobile: regex }, { ownerId: regex }] }).select('_id'),
+        Vehicle.find({ pumpId, vehicleNumber: regex }).select('_id'),
+      ]);
+      const ownerIds = matchedOwners.map((o) => o._id);
+      const vehicleIds = matchedVehicles.map((v) => v._id);
+
+      query.$or = [
+        { paymentId: regex },
+        { remark: regex },
+        { transactionRef: regex },
+        { ownerId: { $in: ownerIds } },
+        { vehicleId: { $in: vehicleIds } },
+      ];
+    }
+
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 20;
+
+    if (all === 'true' || limitNum <= 0) {
+      const payments = await Payment.find(query)
+        .populate('ownerId', 'name ownerId mobile companyName')
+        .populate('vehicleId', 'vehicleNumber vehicleName')
+        .populate('receivedBy', 'name username')
+        .sort({ createdAt: -1 });
+
+      return res.json({
+        success: true,
+        count: payments.length,
+        total: payments.length,
+        page: 1,
+        totalPages: 1,
+        data: payments,
+      });
+    }
+
+    const skip = (pageNum - 1) * limitNum;
+
+    const [payments, total, summaryAgg] = await Promise.all([
       Payment.find(query)
         .populate('ownerId', 'name ownerId mobile companyName')
         .populate('vehicleId', 'vehicleNumber vehicleName')
         .populate('receivedBy', 'name username')
         .sort({ createdAt: -1 })
         .skip(skip)
-        .limit(parseInt(limit, 10)),
+        .limit(limitNum),
       Payment.countDocuments(query),
+      Payment.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: null,
+            totalCollected: {
+              $sum: {
+                $cond: [{ $eq: ['$status', 'active'] }, '$amount', 0],
+              },
+            },
+            totalCount: { $sum: 1 },
+          },
+        },
+      ]),
     ]);
+
+    const summary = summaryAgg[0] || {
+      totalCollected: 0,
+      totalCount: 0,
+    };
 
     return res.json({
       success: true,
       count: payments.length,
       total,
+      page: pageNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+      summary,
       data: payments,
     });
   } catch (err) {

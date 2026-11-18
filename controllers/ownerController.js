@@ -18,19 +18,71 @@ const generateOwnerId = async (pumpId) => {
 exports.getOwners = async (req, res) => {
   try {
     const pumpId = req.user.pumpId;
-    const { search, status } = req.query;
+    const { search, status, hasOutstanding, page, limit, sortBy = 'name', sortOrder = 'asc' } = req.query;
 
     const query = { pumpId };
     if (status && ['active', 'inactive'].includes(status)) {
       query.status = status;
     }
-    if (search) {
-      const regex = new RegExp(search.trim(), 'i');
+    if (hasOutstanding === 'true') {
+      query.totalOutstanding = { $gt: 0 };
+    }
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       query.$or = [{ name: regex }, { mobile: regex }, { companyName: regex }, { ownerId: regex }];
     }
 
-    const owners = await Owner.find(query).sort({ name: 1 });
-    return res.json({ success: true, count: owners.length, data: owners });
+    const sortObj = {};
+    if (sortBy === 'outstanding') {
+      sortObj.totalOutstanding = sortOrder === 'asc' ? 1 : -1;
+    } else if (sortBy === 'createdAt') {
+      sortObj.createdAt = sortOrder === 'asc' ? 1 : -1;
+    } else {
+      sortObj.name = sortOrder === 'asc' ? 1 : -1;
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+
+    // Compute overall summary stats for the pump
+    const summaryAgg = await Owner.aggregate([
+      { $match: { pumpId } },
+      { $group: { _id: null, totalOutstandingSum: { $sum: '$totalOutstanding' }, totalCount: { $sum: 1 } } },
+    ]);
+    const summary = summaryAgg[0] || { totalOutstandingSum: 0, totalCount: 0 };
+
+    if (pageNum > 0 && limitNum > 0) {
+      const total = await Owner.countDocuments(query);
+      const skip = (pageNum - 1) * limitNum;
+      const owners = await Owner.find(query).sort(sortObj).skip(skip).limit(limitNum);
+      return res.json({
+        success: true,
+        count: owners.length,
+        total,
+        page: pageNum,
+        totalPages: Math.ceil(total / limitNum) || 1,
+        summary: {
+          totalOutstandingSum: summary.totalOutstandingSum,
+          totalCount: summary.totalCount,
+        },
+        data: owners,
+      });
+    }
+
+    // Default or limit=0 or all=true: return all matching
+    const owners = await Owner.find(query).sort(sortObj);
+    return res.json({
+      success: true,
+      count: owners.length,
+      total: owners.length,
+      page: 1,
+      totalPages: 1,
+      summary: {
+        totalOutstandingSum: summary.totalOutstandingSum,
+        totalCount: summary.totalCount,
+      },
+      data: owners,
+    });
   } catch (err) {
     console.error('getOwners error:', err);
     return res.status(500).json({ success: false, message: 'Server error' });

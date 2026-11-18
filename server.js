@@ -8,8 +8,18 @@ connectDB();
 
 const app = express();
 
+const path = require('path');
+const fs = require('fs');
+
 // Middleware
-app.use(cors());
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? (process.env.CORS_ORIGIN === '*' ? '*' : process.env.CORS_ORIGIN.split(',').map((s) => s.trim()))
+  : '*';
+
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -35,7 +45,17 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 404 handler
+// Serve static frontend assets if built
+const frontendDist = path.join(__dirname, '../frontend/dist');
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
+
+// 404 handler for API routes
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' });
 });

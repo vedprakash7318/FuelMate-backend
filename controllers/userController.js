@@ -3,14 +3,61 @@ const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const { logAudit } = require('../middleware/auditLog');
 
-// GET /api/users - List employees
+// GET /api/users - List employees with search, filter, pagination
 exports.getUsers = async (req, res) => {
   try {
     const pumpId = req.user.pumpId;
-    const users = await User.find({ pumpId, role: 'employee' })
-      .select('-password')
-      .sort({ createdAt: -1 });
-    return res.json({ success: true, count: users.length, data: users });
+    const { search, status, page = 1, limit = 20, all = 'false' } = req.query;
+
+    const query = { pumpId, role: 'employee' };
+    if (status) query.status = status;
+
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(escaped, 'i');
+      query.$or = [
+        { name: regex },
+        { username: regex },
+        { mobile: regex },
+        { email: regex },
+      ];
+    }
+
+    const pageNum = parseInt(page, 10) || 1;
+    const limitNum = parseInt(limit, 10) || 20;
+
+    if (all === 'true' || limitNum <= 0) {
+      const users = await User.find(query)
+        .select('-password')
+        .sort({ createdAt: -1 });
+      return res.json({
+        success: true,
+        count: users.length,
+        total: users.length,
+        page: 1,
+        totalPages: 1,
+        data: users,
+      });
+    }
+
+    const skip = (pageNum - 1) * limitNum;
+    const [users, total] = await Promise.all([
+      User.find(query)
+        .select('-password')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      User.countDocuments(query),
+    ]);
+
+    return res.json({
+      success: true,
+      count: users.length,
+      total,
+      page: pageNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+      data: users,
+    });
   } catch (err) {
     console.error('getUsers error:', err);
     return res.status(500).json({ success: false, message: 'Server error' });

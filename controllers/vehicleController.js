@@ -18,7 +18,18 @@ const generateVehicleId = async (pumpId) => {
 exports.getVehicles = async (req, res) => {
   try {
     const pumpId = req.user.pumpId;
-    const { search, ownerId, status } = req.query;
+    const {
+      search,
+      ownerId,
+      status,
+      vehicleType,
+      fuelType,
+      hasBalance,
+      page,
+      limit,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = req.query;
 
     const query = { pumpId };
     if (status && ['active', 'inactive'].includes(status)) {
@@ -27,16 +38,72 @@ exports.getVehicles = async (req, res) => {
     if (ownerId) {
       query.ownerId = ownerId;
     }
-    if (search) {
-      const regex = new RegExp(search.trim(), 'i');
-      query.$or = [{ vehicleNumber: regex }, { vehicleName: regex }, { driverName: regex }, { driverMobile: regex }];
+    if (vehicleType && vehicleType !== 'all') {
+      query.vehicleType = vehicleType;
+    }
+    if (fuelType && fuelType !== 'all') {
+      const ftRegex = new RegExp(fuelType.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [{ fuelTypes: ftRegex }, { fuelType: ftRegex }];
+    }
+    if (hasBalance === 'true') {
+      query.pendingBalance = { $gt: 0 };
+    }
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [
+        { vehicleNumber: regex },
+        { vehicleName: regex },
+        { driverName: regex },
+        { driverMobile: regex },
+      ];
     }
 
+    const sortObj = {};
+    if (sortBy === 'balance') {
+      sortObj.pendingBalance = sortOrder === 'asc' ? 1 : -1;
+    } else if (sortBy === 'consumed') {
+      sortObj.totalFuelConsumed = sortOrder === 'asc' ? 1 : -1;
+    } else if (sortBy === 'vehicleNumber') {
+      sortObj.vehicleNumber = sortOrder === 'asc' ? 1 : -1;
+    } else {
+      sortObj.createdAt = sortOrder === 'asc' ? 1 : -1;
+    }
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+
+    if (pageNum > 0 && limitNum > 0) {
+      const total = await Vehicle.countDocuments(query);
+      const skip = (pageNum - 1) * limitNum;
+      const vehicles = await Vehicle.find(query)
+        .populate('ownerId', 'name ownerId mobile companyName')
+        .sort(sortObj)
+        .skip(skip)
+        .limit(limitNum);
+
+      return res.json({
+        success: true,
+        count: vehicles.length,
+        total,
+        page: pageNum,
+        totalPages: Math.ceil(total / limitNum) || 1,
+        data: vehicles,
+      });
+    }
+
+    // Default or limit=0 or all=true: return all matching
     const vehicles = await Vehicle.find(query)
       .populate('ownerId', 'name ownerId mobile companyName')
-      .sort({ createdAt: -1 });
+      .sort(sortObj);
 
-    return res.json({ success: true, count: vehicles.length, data: vehicles });
+    return res.json({
+      success: true,
+      count: vehicles.length,
+      total: vehicles.length,
+      page: 1,
+      totalPages: 1,
+      data: vehicles,
+    });
   } catch (err) {
     console.error('getVehicles error:', err);
     return res.status(500).json({ success: false, message: 'Server error' });
